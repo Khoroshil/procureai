@@ -20,7 +20,7 @@ type OfferItem = {
   supplier: string;
 };
 
-const REQUEST_ARTICLE_HEADERS = [
+const ARTICLE_HEADERS = [
   "артикул",
   "код",
   "номер",
@@ -30,7 +30,7 @@ const REQUEST_ARTICLE_HEADERS = [
   "sku",
 ];
 
-const REQUEST_NAME_HEADERS = [
+const NAME_HEADERS = [
   "наименование",
   "название",
   "товар",
@@ -95,7 +95,7 @@ function normalizeText(value: unknown): string {
     .trim();
 }
 
-function numberValue(value: unknown): number {
+function parseNumber(value: unknown): number {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : 0;
   }
@@ -135,39 +135,41 @@ function findColumn(
   return undefined;
 }
 
-function rowsFromWorkbook(buffer: Buffer): Row[] {
+function readFirstSheet(buffer: Buffer): Row[] {
   const workbook = XLSX.read(buffer, {
     type: "buffer",
     cellDates: true,
   });
 
-  const sheetName = workbook.SheetNames[0];
+  const firstSheetName = workbook.SheetNames[0];
 
-  if (!sheetName) {
-    throw new Error("В файле не найден лист Excel.");
+  if (!firstSheetName) {
+    throw new Error("В Excel-файле отсутствует лист.");
   }
 
-  const sheet = workbook.Sheets[sheetName];
+  const sheet = workbook.Sheets[firstSheetName];
 
   return XLSX.utils.sheet_to_json<Row>(sheet, {
     defval: "",
   });
 }
 
-function detectRequestRows(rows: Row[]): RequestItem[] {
-  if (!rows.length) return [];
+function parseRequest(rows: Row[]): RequestItem[] {
+  if (rows.length === 0) {
+    return [];
+  }
 
-  const rawHeaders = Object.keys(rows[0]);
-  const headers = rawHeaders.map(normalizeHeader);
+  const originalHeaders = Object.keys(rows[0]);
+  const headers = originalHeaders.map(normalizeHeader);
 
   const articleHeader = findColumn(
     headers,
-    REQUEST_ARTICLE_HEADERS
+    ARTICLE_HEADERS
   );
 
   const nameHeader = findColumn(
     headers,
-    REQUEST_NAME_HEADERS
+    NAME_HEADERS
   );
 
   const quantityHeader = findColumn(
@@ -176,15 +178,15 @@ function detectRequestRows(rows: Row[]): RequestItem[] {
   );
 
   const articleKey = articleHeader
-    ? rawHeaders[headers.indexOf(articleHeader)]
+    ? originalHeaders[headers.indexOf(articleHeader)]
     : undefined;
 
   const nameKey = nameHeader
-    ? rawHeaders[headers.indexOf(nameHeader)]
+    ? originalHeaders[headers.indexOf(nameHeader)]
     : undefined;
 
   const quantityKey = quantityHeader
-    ? rawHeaders[headers.indexOf(quantityHeader)]
+    ? originalHeaders[headers.indexOf(quantityHeader)]
     : undefined;
 
   return rows
@@ -197,7 +199,7 @@ function detectRequestRows(rows: Row[]): RequestItem[] {
         nameKey ? row[nameKey] ?? "" : ""
       ).trim();
 
-      const quantity = numberValue(
+      const quantity = parseNumber(
         quantityKey ? row[quantityKey] : 1
       );
 
@@ -211,23 +213,25 @@ function detectRequestRows(rows: Row[]): RequestItem[] {
     .filter((item) => item.key);
 }
 
-function detectOfferRows(
+function parseOffer(
   rows: Row[],
   supplier: string
 ): OfferItem[] {
-  if (!rows.length) return [];
+  if (rows.length === 0) {
+    return [];
+  }
 
-  const rawHeaders = Object.keys(rows[0]);
-  const headers = rawHeaders.map(normalizeHeader);
+  const originalHeaders = Object.keys(rows[0]);
+  const headers = originalHeaders.map(normalizeHeader);
 
   const articleHeader = findColumn(
     headers,
-    REQUEST_ARTICLE_HEADERS
+    ARTICLE_HEADERS
   );
 
   const nameHeader = findColumn(
     headers,
-    REQUEST_NAME_HEADERS
+    NAME_HEADERS
   );
 
   const priceHeader = findColumn(
@@ -246,23 +250,23 @@ function detectOfferRows(
   );
 
   const articleKey = articleHeader
-    ? rawHeaders[headers.indexOf(articleHeader)]
+    ? originalHeaders[headers.indexOf(articleHeader)]
     : undefined;
 
   const nameKey = nameHeader
-    ? rawHeaders[headers.indexOf(nameHeader)]
+    ? originalHeaders[headers.indexOf(nameHeader)]
     : undefined;
 
   const priceKey = priceHeader
-    ? rawHeaders[headers.indexOf(priceHeader)]
+    ? originalHeaders[headers.indexOf(priceHeader)]
     : undefined;
 
   const stockKey = stockHeader
-    ? rawHeaders[headers.indexOf(stockHeader)]
+    ? originalHeaders[headers.indexOf(stockHeader)]
     : undefined;
 
   const deliveryKey = deliveryHeader
-    ? rawHeaders[headers.indexOf(deliveryHeader)]
+    ? originalHeaders[headers.indexOf(deliveryHeader)]
     : undefined;
 
   return rows
@@ -275,27 +279,23 @@ function detectOfferRows(
         nameKey ? row[nameKey] ?? "" : ""
       ).trim();
 
-      const price = numberValue(
+      const price = parseNumber(
         priceKey ? row[priceKey] : 0
       );
 
-      const stockRaw = stockKey
-        ? row[stockKey]
-        : "";
-
-      const stockText = String(
-        stockRaw ?? ""
+      const stockValue = String(
+        stockKey ? row[stockKey] ?? "" : ""
       )
         .trim()
         .toLowerCase();
 
       let stock: number | null = null;
 
-      if (stockText) {
-        const parsedStock = numberValue(stockRaw);
+      if (stockValue) {
+        const numericStock = parseNumber(stockValue);
 
-        if (parsedStock > 0) {
-          stock = parsedStock;
+        if (numericStock > 0) {
+          stock = numericStock;
         } else if (
           [
             "да",
@@ -304,7 +304,7 @@ function detectOfferRows(
             "много",
             "yes",
             "in stock",
-          ].includes(stockText)
+          ].includes(stockValue)
         ) {
           stock = 999999;
         }
@@ -333,9 +333,13 @@ function similarity(
   a: string,
   b: string
 ): number {
-  if (!a || !b) return 0;
+  if (!a || !b) {
+    return 0;
+  }
 
-  if (a === b) return 1;
+  if (a === b) {
+    return 1;
+  }
 
   const aTokens = new Set(a.split(" "));
   const bTokens = new Set(b.split(" "));
@@ -349,9 +353,85 @@ function similarity(
     ...bTokens,
   ]).size;
 
-  return union
-    ? intersection / union
-    : 0;
+  return union === 0
+    ? 0
+    : intersection / union;
+}
+
+function isAvailable(
+  offer: OfferItem,
+  requiredQuantity: number
+): boolean {
+  return (
+    offer.stock === null ||
+    offer.stock >= requiredQuantity
+  );
+}
+
+function findCandidates(
+  requestItem: RequestItem,
+  offers: OfferItem[]
+): (OfferItem & { score: number })[] {
+  return offers
+    .map((offer) => {
+      const requestArticle =
+        normalizeText(requestItem.article);
+
+      const offerArticle =
+        normalizeText(offer.article);
+
+      const requestName =
+        normalizeText(requestItem.name);
+
+      const offerName =
+        normalizeText(offer.name);
+
+      const exactArticle =
+        requestArticle !== "" &&
+        offerArticle !== "" &&
+        requestArticle === offerArticle;
+
+      const articleScore =
+        requestArticle && offerArticle
+          ? similarity(
+              requestArticle,
+              offerArticle
+            )
+          : 0;
+
+      const nameScore =
+        requestName && offerName
+          ? similarity(
+              requestName,
+              offerName
+            )
+          : 0;
+
+      return {
+        ...offer,
+        score: exactArticle
+          ? 1
+          : Math.max(
+              articleScore,
+              nameScore
+            ),
+      };
+    })
+    .filter(
+      (offer) =>
+        offer.score >= 0.35 &&
+        isAvailable(
+          offer,
+          requestItem.quantity
+        )
+    )
+    .sort((a, b) => {
+      if (b.score !== a.score) {
+        return b.score - a.score;
+      }
+
+      return a.price - b.price;
+    });
 }
 
 export async function POST(
@@ -377,11 +457,11 @@ export async function POST(
       );
     }
 
-    if (!offerFiles.length) {
+    if (offerFiles.length === 0) {
       return NextResponse.json(
         {
           error:
-            "Не загружены КП поставщиков.",
+            "Не загружены коммерческие предложения.",
         },
         { status: 400 }
       );
@@ -392,35 +472,28 @@ export async function POST(
     );
 
     const requestRows =
-      rowsFromWorkbook(requestBuffer);
+      readFirstSheet(requestBuffer);
 
     const requestItems =
-      detectRequestRows(requestRows);
+      parseRequest(requestRows);
 
-    if (!requestItems.length) {
+    if (requestItems.length === 0) {
       return NextResponse.json(
         {
           error:
-            "Не удалось распознать позиции заявки. Нужны колонки «Артикул», «Наименование» и «Количество».",
+            "Не удалось распознать заявку. Проверьте колонки «Артикул», «Наименование» и «Количество».",
         },
         { status: 400 }
       );
     }
 
-    const offers: OfferItem[] = [];
-    const uploadedSuppliers: string[] = [];
+    const allOffers: OfferItem[] = [];
+    const supplierNames: string[] = [];
 
     for (const file of offerFiles) {
       if (!(file instanceof File)) {
         continue;
       }
-
-      const buffer = Buffer.from(
-        await file.arrayBuffer()
-      );
-
-      const rows =
-        rowsFromWorkbook(buffer);
 
       const supplier =
         file.name.replace(
@@ -428,26 +501,39 @@ export async function POST(
           ""
         );
 
-      uploadedSuppliers.push(
-        supplier
+      const buffer = Buffer.from(
+        await file.arrayBuffer()
       );
 
-      offers.push(
-        ...detectOfferRows(
+      const rows =
+        readFirstSheet(buffer);
+
+      const parsed =
+        parseOffer(
           rows,
           supplier
-        )
-      );
+        );
+
+      if (parsed.length > 0) {
+        allOffers.push(...parsed);
+
+        if (
+          !supplierNames.includes(
+            supplier
+          )
+        ) {
+          supplierNames.push(
+            supplier
+          );
+        }
+      }
     }
 
-    const supplierNames =
-      [...new Set(uploadedSuppliers)];
-
-    if (!offers.length) {
+    if (allOffers.length === 0) {
       return NextResponse.json(
         {
           error:
-            "В загруженных КП не удалось найти позиции с ценой.",
+            "В КП не найдены позиции с корректной ценой.",
         },
         { status: 400 }
       );
@@ -455,228 +541,143 @@ export async function POST(
 
     const results = requestItems.map(
       (requestItem) => {
-        const candidates = offers
-          .map((offer) => {
-            const articleSimilarity =
-              requestItem.article &&
-              offer.article
-                ? similarity(
-                    normalizeText(
-                      requestItem.article
-                    ),
-                    normalizeText(
-                      offer.article
-                    )
-                  )
-                : 0;
-
-            const nameSimilarity =
-              similarity(
-                normalizeText(
-                  requestItem.name
-                ),
-                normalizeText(
-                  offer.name
-                )
-              );
-
-            const exactArticle =
-              normalizeText(
-                requestItem.article
-              ) !== "" &&
-              normalizeText(
-                requestItem.article
-              ) ===
-                normalizeText(
-                  offer.article
-                );
-
-            return {
-              ...offer,
-              score: exactArticle
-                ? 1
-                : Math.max(
-                    articleSimilarity,
-                    nameSimilarity
-                  ),
-            };
-          })
-          .filter(
-            (offer) =>
-              offer.score >= 0.35
+        const candidates =
+          findCandidates(
+            requestItem,
+            allOffers
           );
 
-        const availableCandidates =
-          candidates.filter(
-            (candidate) =>
-              candidate.stock === null ||
-              candidate.stock >=
-                requestItem.quantity
-          );
+        const best =
+          candidates.length > 0
+            ? candidates.reduce(
+                (current, candidate) => {
+                  if (
+                    candidate.score >
+                    current.score
+                  ) {
+                    return candidate;
+                  }
 
-        availableCandidates.sort(
-          (a, b) => {
-            if (a.score !== b.score) {
-              return b.score - a.score;
-            }
+                  if (
+                    candidate.score ===
+                      current.score &&
+                    candidate.price <
+                      current.price
+                  ) {
+                    return candidate;
+                  }
 
-            return (
-              a.price - b.price
-            );
-          }
-        );
+                  return current;
+                }
+              )
+            : null;
 
-        const exactCandidates =
-          availableCandidates.filter(
-            (candidate) =>
-              candidate.score >= 0.99
-          );
-
-        const pool =
-          exactCandidates.length
-            ? exactCandidates
-            : availableCandidates;
-
-        pool.sort(
-          (a, b) =>
-            a.price - b.price
-        );
-
-        const best = pool[0];
-
-        const total = best
-          ? best.price *
-            requestItem.quantity
-          : null;
+        const total =
+          best !== null
+            ? best.price *
+              requestItem.quantity
+            : null;
 
         return {
           article:
             requestItem.article,
+
           name:
             requestItem.name,
+
           quantity:
             requestItem.quantity,
+
           supplier:
             best?.supplier ?? null,
+
           price:
             best?.price ?? null,
+
           total,
+
           delivery:
             best?.delivery ?? null,
+
           alternatives:
-            pool
+            candidates
               .slice(0, 10)
-              .map(
-                (candidate) => ({
-                  supplier:
-                    candidate.supplier,
-                  price:
-                    candidate.price,
-                  stock:
-                    candidate.stock,
-                  delivery:
-                    candidate.delivery,
-                  score:
-                    Number(
-                      candidate.score.toFixed(
-                        2
-                      )
-                    ),
-                })
-              ),
+              .sort(
+                (a, b) =>
+                  a.price - b.price
+              )
+              .map((candidate) => ({
+                supplier:
+                  candidate.supplier,
+                price:
+                  candidate.price,
+                stock:
+                  candidate.stock,
+                delivery:
+                  candidate.delivery,
+                score:
+                  Number(
+                    candidate.score.toFixed(
+                      2
+                    )
+                  ),
+              })),
         };
       }
     );
 
-    const validResults =
+    const matchedResults =
       results.filter(
         (item) =>
-          item.price !== null &&
           item.total !== null
       );
 
-    const unmatched =
-      results.filter(
-        (item) =>
-          item.price === null
-      ).length;
+    const unmatchedCount =
+      results.length -
+      matchedResults.length;
 
-    const optimalTotal =
-      validResults.reduce(
-        (sum, item) =>
-          sum + (item.total ?? 0),
-        0
-      );
+    /*
+      Для честного расчёта экономии
+      проверяем стоимость всей заявки,
+      если покупать её целиком у каждого
+      отдельного поставщика.
+    */
 
-    // Считаем стоимость закупки целиком
-    // у каждого отдельного поставщика.
     const singleSupplierTotals =
       supplierNames.map(
         (supplier) => {
           let total = 0;
 
           for (
-            const requestItem
-            of requestItems
+            const requestItem of requestItems
           ) {
-            const candidates =
-              offers.filter(
-                (offer) => {
-                  if (
-                    offer.supplier !==
+            const supplierOffers =
+              findCandidates(
+                requestItem,
+                allOffers.filter(
+                  (offer) =>
+                    offer.supplier ===
                     supplier
-                  ) {
-                    return false;
-                  }
-
-                  const articleMatch =
-                    requestItem.article &&
-                    offer.article &&
-                    normalizeText(
-                      requestItem.article
-                    ) ===
-                      normalizeText(
-                        offer.article
-                      );
-
-                  const nameScore =
-                    similarity(
-                      normalizeText(
-                        requestItem.name
-                      ),
-                      normalizeText(
-                        offer.name
-                      )
-                    );
-
-                  const enoughStock =
-                    offer.stock ===
-                      null ||
-                    offer.stock >=
-                      requestItem.quantity;
-
-                  return (
-                    enoughStock &&
-                    (articleMatch ||
-                      nameScore >= 0.35)
-                  );
-                }
+                )
               );
 
-            candidates.sort(
-              (a, b) =>
-                a.price - b.price
-            );
-
-            const best =
-              candidates[0];
-
-            if (!best) {
+            if (
+              supplierOffers.length === 0
+            ) {
               return Infinity;
             }
 
+            const cheapest =
+              supplierOffers.reduce(
+                (current, candidate) =>
+                  candidate.price <
+                  current.price
+                    ? candidate
+                    : current
+              );
+
             total +=
-              best.price *
+              cheapest.price *
               requestItem.quantity;
           }
 
@@ -684,24 +685,33 @@ export async function POST(
         }
       );
 
-    const bestSingleSupplier =
-      Math.min(
-        ...singleSupplierTotals
+    const bestSingleSupplierCost =
+      singleSupplierTotals.length > 0
+        ? Math.min(
+            ...singleSupplierTotals
+          )
+        : Infinity;
+
+    const optimalTotal =
+      matchedResults.reduce(
+        (sum, item) =>
+          sum + (item.total ?? 0),
+        0
       );
 
     const potentialSavings =
       Number.isFinite(
-        bestSingleSupplier
+        bestSingleSupplierCost
       )
         ? Math.max(
             0,
-            bestSingleSupplier -
+            bestSingleSupplierCost -
               optimalTotal
           )
         : 0;
 
     const optimalBreakdown =
-      validResults.reduce<
+      matchedResults.reduce<
         Record<
           string,
           {
@@ -710,23 +720,27 @@ export async function POST(
           }
         >
       >(
-        (acc, item) => {
+        (accumulator, item) => {
           const supplier =
-            item.supplier ||
+            item.supplier ??
             "Не определён";
 
-          if (!acc[supplier]) {
-            acc[supplier] = {
+          if (
+            !accumulator[supplier]
+          ) {
+            accumulator[supplier] = {
               items: 0,
               total: 0,
             };
           }
 
-          acc[supplier].items += 1;
-          acc[supplier].total +=
+          accumulator[supplier].items +=
+            1;
+
+          accumulator[supplier].total +=
             item.total ?? 0;
 
-          return acc;
+          return accumulator;
         },
         {}
       );
@@ -744,10 +758,9 @@ export async function POST(
         requestItems.length,
 
       matchedCount:
-        validResults.length,
+        matchedResults.length,
 
-      unmatchedCount:
-        unmatched,
+      unmatchedCount,
 
       supplierCount:
         supplierNames.length,
@@ -757,9 +770,9 @@ export async function POST(
 
       bestSingleSupplierCost:
         Number.isFinite(
-          bestSingleSupplier
+          bestSingleSupplierCost
         )
-          ? bestSingleSupplier
+          ? bestSingleSupplierCost
           : null,
 
       potentialSavings,
@@ -770,7 +783,7 @@ export async function POST(
     });
   } catch (error) {
     console.error(
-      "ProcureAI analyze error:",
+      "ProcureAI analysis error:",
       error
     );
 
