@@ -39,6 +39,12 @@ function formatRub(value: number | null) {
   }).format(value);
 }
 
+const telegramUrl =
+  "https://t.me/Lafet29?text=" +
+  encodeURIComponent(
+    "Здравствуйте! У меня вопрос по ProcureAI."
+  );
+
 export default function Home() {
   const [requestFile, setRequestFile] = useState<File | null>(null);
   const [offerFiles, setOfferFiles] = useState<File[]>([]);
@@ -55,6 +61,7 @@ export default function Home() {
 
   function handleOfferFiles(e: ChangeEvent<HTMLInputElement>) {
     setError("");
+
     const files = e.target.files
       ? Array.from(e.target.files)
       : [];
@@ -127,9 +134,20 @@ export default function Home() {
             <span>Тарифы</span>
           </nav>
 
-          <button className="primary-btn">
-            Войти
-          </button>
+          <a
+            href={telegramUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="primary-btn"
+            style={{
+              textDecoration: "none",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 7,
+            }}
+          >
+            💬 Задать вопрос
+          </a>
         </div>
       </header>
 
@@ -218,6 +236,39 @@ export default function Home() {
                   : "Проанализировать закупку"}
               </button>
 
+              <div
+                style={{
+                  marginTop: 16,
+                  paddingTop: 18,
+                  borderTop: "1px solid #edf0f5",
+                  textAlign: "center",
+                }}
+              >
+                <div
+                  style={{
+                    color: "#667085",
+                    fontSize: 13,
+                    marginBottom: 9,
+                  }}
+                >
+                  Нужна помощь с загрузкой или результатом?
+                </div>
+
+                <a
+                  href={telegramUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    color: "#2563eb",
+                    textDecoration: "none",
+                    fontWeight: 700,
+                    fontSize: 14,
+                  }}
+                >
+                  💬 Задать вопрос онлайн
+                </a>
+              </div>
+
               {error && (
                 <div
                   style={{
@@ -240,6 +291,7 @@ export default function Home() {
                   <div className="stat-label">
                     Позиции заявки
                   </div>
+
                   <div className="stat-value">
                     {analysis.positionCount}
                   </div>
@@ -249,6 +301,7 @@ export default function Home() {
                   <div className="stat-label">
                     Поставщики
                   </div>
+
                   <div className="stat-value">
                     {analysis.supplierCount}
                   </div>
@@ -258,8 +311,11 @@ export default function Home() {
                   <div className="stat-label">
                     Потенциальная экономия
                   </div>
+
                   <div className="stat-value">
-                    {formatRub(analysis.potentialSavings)}
+                    {formatRub(
+                      analysis.potentialSavings
+                    )}
                   </div>
                 </div>
               </div>
@@ -269,11 +325,14 @@ export default function Home() {
 
         {analysis && (
           <section className="dashboard container">
-            <h2>
-              Результат анализа
-            </h2>
+            <h2>Результат анализа</h2>
 
-            <p style={{ color: "#667085", marginBottom: 18 }}>
+            <p
+              style={{
+                color: "#667085",
+                marginBottom: 18,
+              }}
+            >
               Обработано:{" "}
               <strong>{analysis.requestFile}</strong>
               {" · "}
@@ -305,21 +364,20 @@ export default function Home() {
 
                 <tbody>
                   {analysis.results.map((item, index) => (
-                    <tr key={`${item.article}-${index}`}>
+                    <tr
+                      key={`${item.article}-${index}`}
+                    >
                       <td>
                         {item.article || "—"}
                       </td>
 
-                      <td>
-                        {item.name}
-                      </td>
+                      <td>{item.name}</td>
+
+                      <td>{item.quantity}</td>
 
                       <td>
-                        {item.quantity}
-                      </td>
-
-                      <td>
-                        {item.supplier || "Не найдено"}
+                        {item.supplier ||
+                          "Не найдено"}
                       </td>
 
                       <td>
@@ -338,13 +396,67 @@ export default function Home() {
                 </tbody>
               </table>
             </div>
+
+            <div
+              className="card"
+              style={{
+                marginTop: 20,
+                padding: 24,
+                textAlign: "center",
+              }}
+            >
+              <h3 style={{ marginTop: 0 }}>
+                Нужна помощь с результатом?
+              </h3>
+
+              <p
+                style={{
+                  color: "#667085",
+                  marginBottom: 18,
+                }}
+              >
+                Напишите нам — поможем разобраться
+                с анализом закупки.
+              </p>
+
+              <a
+                href={telegramUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="primary-btn"
+                style={{
+                  textDecoration: "none",
+                  display: "inline-flex",
+                }}
+              >
+                💬 Задать вопрос онлайн
+              </a>
+            </div>
           </section>
         )}
       </main>
 
       <footer className="footer">
         <div className="container">
-          ProcureAI · AI-закупщик для российского бизнеса
+          <div>
+            ProcureAI · AI-закупщик для российского бизнеса
+          </div>
+
+          <div style={{ marginTop: 8 }}>
+            Поддержка:{" "}
+            <a
+              href={telegramUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                color: "#2563eb",
+                textDecoration: "none",
+                fontWeight: 600,
+              }}
+            >
+              @Lafet29
+            </a>
+          </div>
         </div>
       </footer>
     </>
