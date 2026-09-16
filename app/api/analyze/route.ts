@@ -20,6 +20,10 @@ type OfferItem = {
   supplier: string;
 };
 
+type Candidate = OfferItem & {
+  score: number;
+};
+
 const ARTICLE_HEADERS = [
   "артикул",
   "код",
@@ -144,7 +148,9 @@ function readFirstSheet(buffer: Buffer): Row[] {
   const firstSheetName = workbook.SheetNames[0];
 
   if (!firstSheetName) {
-    throw new Error("В Excel-файле отсутствует лист.");
+    throw new Error(
+      "В Excel-файле отсутствует лист."
+    );
   }
 
   const sheet = workbook.Sheets[firstSheetName];
@@ -283,7 +289,7 @@ function parseOffer(
         priceKey ? row[priceKey] : 0
       );
 
-      const stockValue = String(
+      const stockText = String(
         stockKey ? row[stockKey] ?? "" : ""
       )
         .trim()
@@ -291,8 +297,10 @@ function parseOffer(
 
       let stock: number | null = null;
 
-      if (stockValue) {
-        const numericStock = parseNumber(stockValue);
+      if (stockText) {
+        const numericStock = parseNumber(
+          stockText
+        );
 
         if (numericStock > 0) {
           stock = numericStock;
@@ -304,14 +312,16 @@ function parseOffer(
             "много",
             "yes",
             "in stock",
-          ].includes(stockValue)
+          ].includes(stockText)
         ) {
           stock = 999999;
         }
       }
 
       const delivery = String(
-        deliveryKey ? row[deliveryKey] ?? "" : ""
+        deliveryKey
+          ? row[deliveryKey] ?? ""
+          : ""
       ).trim();
 
       return {
@@ -360,22 +370,24 @@ function similarity(
 
 function isAvailable(
   offer: OfferItem,
-  requiredQuantity: number
+  quantity: number
 ): boolean {
   return (
     offer.stock === null ||
-    offer.stock >= requiredQuantity
+    offer.stock >= quantity
   );
 }
 
 function findCandidates(
   requestItem: RequestItem,
   offers: OfferItem[]
-): (OfferItem & { score: number })[] {
+): Candidate[] {
   return offers
     .map((offer) => {
       const requestArticle =
-        normalizeText(requestItem.article);
+        normalizeText(
+          requestItem.article
+        );
 
       const offerArticle =
         normalizeText(offer.article);
@@ -434,6 +446,238 @@ function findCandidates(
     });
 }
 
+async function askDeepSeek(
+  requestItem: RequestItem,
+  candidates: Candidate[]
+): Promise<number | null> {
+  const apiKey =
+    process.env.DEEPSEEK_API_KEY;
+
+  if (
+    !apiKey ||
+    candidates.length === 0
+  ) {
+    return null;
+  }
+
+  const candidateData =
+    candidates.map(
+      (candidate, index) => ({
+        index,
+        article:
+          candidate.article,
+        name:
+          candidate.name,
+        supplier:
+          candidate.supplier,
+        price:
+          candidate.price,
+        stock:
+          candidate.stock,
+        delivery:
+          candidate.delivery,
+      })
+    );
+
+  const systemPrompt = `
+Ты — эксперт по закупкам и промышленной номенклатуре.
+
+Твоя задача — определить, какой товар поставщика
+соответствует позиции из заявки.
+
+Сравнивай:
+- артикул;
+- модель;
+- производителя;
+- название;
+- технические характеристики;
+- размер;
+- исполнение;
+- обозначения;
+- дополнительные индексы.
+
+Цена НЕ является критерием совпадения.
+
+Если товары не являются одним и тем же товаром,
+верни matched=false.
+
+Ответь только JSON.
+
+Пример:
+
+{
+  "matched": true,
+  "candidate_index": 0,
+  "confidence": 0.96,
+  "reason": "Совпадает артикул и производитель"
+}
+`;
+
+  const userPrompt = `
+Нужно сопоставить позицию заявки
+с одним из предложений поставщиков.
+
+Позиция заявки:
+
+Артикул:
+${requestItem.article}
+
+Наименование:
+${requestItem.name}
+
+Количество:
+${requestItem.quantity}
+
+Кандидаты:
+
+${JSON.stringify(
+  candidateData,
+  null,
+  2
+)}
+
+Верни JSON.
+`;
+
+  const controller =
+    new AbortController();
+
+  const timeout =
+    setTimeout(
+      () => controller.abort(),
+      15000
+    );
+
+  try {
+    const response =
+      await fetch(
+        "https://api.deepseek.com/chat/completions",
+        {
+          method: "POST",
+
+          signal:
+            controller.signal,
+
+          headers: {
+            "Content-Type":
+              "application/json",
+
+            Authorization:
+              `Bearer ${apiKey}`,
+          },
+
+          body: JSON.stringify({
+            model:
+              "deepseek-flash",
+
+            messages: [
+              {
+                role: "system",
+                content:
+                  systemPrompt,
+              },
+              {
+                role: "user",
+                content:
+                  userPrompt,
+              },
+            ],
+
+            response_format: {
+              type: "json_object",
+            },
+
+            temperature: 0.1,
+
+            max_tokens: 300,
+          }),
+        }
+      );
+
+    if (!response.ok) {
+      console.error(
+        "DeepSeek HTTP error:",
+        response.status
+      );
+
+      return null;
+    }
+
+    const data =
+      await response.json();
+
+    const content =
+      data?.choices?.[0]
+        ?.message?.content;
+
+    if (
+      typeof content !== "string" ||
+      content.trim() === ""
+    ) {
+      return null;
+    }
+
+    const parsed =
+      JSON.parse(content);
+
+    if (
+      parsed?.matched !== true ||
+      typeof parsed?.candidate_index !==
+        "number"
+    ) {
+      return null;
+    }
+
+    if (
+      typeof parsed.confidence !==
+        "number" ||
+      parsed.confidence < 0.75
+    ) {
+      return null;
+    }
+
+    const index =
+      Math.floor(
+        parsed.candidate_index
+      );
+
+    if (
+      index < 0 ||
+      index >= candidates.length
+    ) {
+      return null;
+    }
+
+    return index;
+  } catch (error) {
+    console.error(
+      "DeepSeek request failed:",
+      error
+    );
+
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function chooseCheapest(
+  candidates: Candidate[]
+): Candidate | null {
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  return candidates.reduce(
+    (best, candidate) => {
+      return candidate.price <
+        best.price
+        ? candidate
+        : best;
+    }
+  );
+}
+
 export async function POST(
   request: NextRequest
 ) {
@@ -467,17 +711,22 @@ export async function POST(
       );
     }
 
-    const requestBuffer = Buffer.from(
-      await requestFile.arrayBuffer()
-    );
+    const requestBuffer =
+      Buffer.from(
+        await requestFile.arrayBuffer()
+      );
 
     const requestRows =
-      readFirstSheet(requestBuffer);
+      readFirstSheet(
+        requestBuffer
+      );
 
     const requestItems =
       parseRequest(requestRows);
 
-    if (requestItems.length === 0) {
+    if (
+      requestItems.length === 0
+    ) {
       return NextResponse.json(
         {
           error:
@@ -487,10 +736,15 @@ export async function POST(
       );
     }
 
-    const allOffers: OfferItem[] = [];
-    const supplierNames: string[] = [];
+    const allOffers: OfferItem[] =
+      [];
 
-    for (const file of offerFiles) {
+    const supplierNames: string[] =
+      [];
+
+    for (
+      const file of offerFiles
+    ) {
       if (!(file instanceof File)) {
         continue;
       }
@@ -501,21 +755,26 @@ export async function POST(
           ""
         );
 
-      const buffer = Buffer.from(
-        await file.arrayBuffer()
-      );
+      const buffer =
+        Buffer.from(
+          await file.arrayBuffer()
+        );
 
       const rows =
         readFirstSheet(buffer);
 
-      const parsed =
+      const parsedOffers =
         parseOffer(
           rows,
           supplier
         );
 
-      if (parsed.length > 0) {
-        allOffers.push(...parsed);
+      if (
+        parsedOffers.length > 0
+      ) {
+        allOffers.push(
+          ...parsedOffers
+        );
 
         if (
           !supplierNames.includes(
@@ -539,92 +798,164 @@ export async function POST(
       );
     }
 
-    const results = requestItems.map(
-      (requestItem) => {
-        const candidates =
-          findCandidates(
-            requestItem,
-            allOffers
-          );
+    const results =
+      await Promise.all(
+        requestItems.map(
+          async (requestItem) => {
+            const candidates =
+              findCandidates(
+                requestItem,
+                allOffers
+              );
 
-        const best =
-          candidates.length > 0
-            ? candidates.reduce(
-                (current, candidate) => {
-                  if (
-                    candidate.score >
-                    current.score
-                  ) {
-                    return candidate;
-                  }
+            if (
+              candidates.length === 0
+            ) {
+              return {
+                article:
+                  requestItem.article,
+                name:
+                  requestItem.name,
+                quantity:
+                  requestItem.quantity,
+                supplier: null,
+                price: null,
+                total: null,
+                delivery: null,
+                alternatives: [],
+              };
+            }
 
-                  if (
-                    candidate.score ===
-                      current.score &&
-                    candidate.price <
-                      current.price
-                  ) {
-                    return candidate;
-                  }
+            const exactArticleCandidates =
+              candidates.filter(
+                (candidate) => {
+                  const a =
+                    normalizeText(
+                      requestItem.article
+                    );
 
-                  return current;
+                  const b =
+                    normalizeText(
+                      candidate.article
+                    );
+
+                  return (
+                    a !== "" &&
+                    b !== "" &&
+                    a === b
+                  );
                 }
-              )
-            : null;
+              );
 
-        const total =
-          best !== null
-            ? best.price *
-              requestItem.quantity
-            : null;
+            let best: Candidate | null =
+              null;
 
-        return {
-          article:
-            requestItem.article,
+            /*
+              1. Полное совпадение артикула:
+                 ИИ не нужен.
+                 Берём самый дешёвый вариант.
+            */
+            if (
+              exactArticleCandidates.length >
+              0
+            ) {
+              best =
+                chooseCheapest(
+                  exactArticleCandidates
+                );
+            } else {
+              /*
+                2. Нет точного артикула.
+                   Просим DeepSeek сопоставить
+                   товар по названию/модели/
+                   характеристикам.
+              */
 
-          name:
-            requestItem.name,
+              const deepSeekIndex =
+                await askDeepSeek(
+                  requestItem,
+                  candidates.slice(0, 10)
+                );
 
-          quantity:
-            requestItem.quantity,
+              if (
+                deepSeekIndex !== null
+              ) {
+                best =
+                  candidates[
+                    deepSeekIndex
+                  ] ?? null;
+              }
 
-          supplier:
-            best?.supplier ?? null,
+              /*
+                3. DeepSeek недоступен или
+                   не уверен — используем
+                   локальный алгоритм.
+              */
+              if (!best) {
+                best =
+                  chooseCheapest(
+                    candidates
+                  );
+              }
+            }
 
-          price:
-            best?.price ?? null,
+            const total =
+              best !== null
+                ? best.price *
+                  requestItem.quantity
+                : null;
 
-          total,
+            return {
+              article:
+                requestItem.article,
 
-          delivery:
-            best?.delivery ?? null,
+              name:
+                requestItem.name,
 
-          alternatives:
-            candidates
-              .slice(0, 10)
-              .sort(
-                (a, b) =>
-                  a.price - b.price
-              )
-              .map((candidate) => ({
-                supplier:
-                  candidate.supplier,
-                price:
-                  candidate.price,
-                stock:
-                  candidate.stock,
-                delivery:
-                  candidate.delivery,
-                score:
-                  Number(
-                    candidate.score.toFixed(
-                      2
-                    )
+              quantity:
+                requestItem.quantity,
+
+              supplier:
+                best?.supplier ?? null,
+
+              price:
+                best?.price ?? null,
+
+              total,
+
+              delivery:
+                best?.delivery ?? null,
+
+              alternatives:
+                candidates
+                  .slice(0, 10)
+                  .sort(
+                    (a, b) =>
+                      a.price -
+                      b.price
+                  )
+                  .map(
+                    (candidate) => ({
+                      supplier:
+                        candidate.supplier,
+                      price:
+                        candidate.price,
+                      stock:
+                        candidate.stock,
+                      delivery:
+                        candidate.delivery,
+                      score:
+                        Number(
+                          candidate.score.toFixed(
+                            2
+                          )
+                        ),
+                    })
                   ),
-              })),
-        };
-      }
-    );
+            };
+          }
+        )
+      );
 
     const matchedResults =
       results.filter(
@@ -636,11 +967,17 @@ export async function POST(
       results.length -
       matchedResults.length;
 
+    const optimalTotal =
+      matchedResults.reduce(
+        (sum, item) =>
+          sum + (item.total ?? 0),
+        0
+      );
+
     /*
-      Для честного расчёта экономии
-      проверяем стоимость всей заявки,
-      если покупать её целиком у каждого
-      отдельного поставщика.
+      Стоимость всей заявки,
+      если закупать всё у одного
+      поставщика.
     */
 
     const singleSupplierTotals =
@@ -649,9 +986,10 @@ export async function POST(
           let total = 0;
 
           for (
-            const requestItem of requestItems
+            const requestItem of
+              requestItems
           ) {
-            const supplierOffers =
+            const supplierCandidates =
               findCandidates(
                 requestItem,
                 allOffers.filter(
@@ -662,19 +1000,20 @@ export async function POST(
               );
 
             if (
-              supplierOffers.length === 0
+              supplierCandidates.length ===
+              0
             ) {
               return Infinity;
             }
 
             const cheapest =
-              supplierOffers.reduce(
-                (current, candidate) =>
-                  candidate.price <
-                  current.price
-                    ? candidate
-                    : current
+              chooseCheapest(
+                supplierCandidates
               );
+
+            if (!cheapest) {
+              return Infinity;
+            }
 
             total +=
               cheapest.price *
@@ -691,13 +1030,6 @@ export async function POST(
             ...singleSupplierTotals
           )
         : Infinity;
-
-    const optimalTotal =
-      matchedResults.reduce(
-        (sum, item) =>
-          sum + (item.total ?? 0),
-        0
-      );
 
     const potentialSavings =
       Number.isFinite(
@@ -720,24 +1052,34 @@ export async function POST(
           }
         >
       >(
-        (accumulator, item) => {
+        (
+          accumulator,
+          item
+        ) => {
           const supplier =
             item.supplier ??
             "Не определён";
 
           if (
-            !accumulator[supplier]
+            !accumulator[
+              supplier
+            ]
           ) {
-            accumulator[supplier] = {
+            accumulator[
+              supplier
+            ] = {
               items: 0,
               total: 0,
             };
           }
 
-          accumulator[supplier].items +=
-            1;
+          accumulator[
+            supplier
+          ].items += 1;
 
-          accumulator[supplier].total +=
+          accumulator[
+            supplier
+          ].total +=
             item.total ?? 0;
 
           return accumulator;
