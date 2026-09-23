@@ -166,7 +166,7 @@ export function normalizeOfferRows(
   rows: ImportedOfferRow[]
 ): SupplierOffer[] {
   return rows
-    .map((row, index) => {
+    .map((row, index): SupplierOffer | null => {
       const articleRaw =
         String(row.articleRaw ?? "").trim();
 

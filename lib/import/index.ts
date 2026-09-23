@@ -59,21 +59,6 @@ const UNIT_HEADERS = [
   "unit",
 ];
 
-const UNIT_HEADERS = [
-  "ед изм",
-  "ед изм.",
-  "единица измерения",
-  "единица",
-  "unit",
-];
-
-const UNIT_HEADERS = [
-  "ед изм",
-  "ед изм.",
-  "единица измерения",
-  "единица",
-  "unit",
-];
 
 const PRICE_HEADERS = [
   "цена",
