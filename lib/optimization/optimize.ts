@@ -46,6 +46,55 @@ function isUsableMatch(
   );
 }
 
+function isOfferAllowed(
+  request: RequestLine,
+  offer: SupplierOffer,
+  constraints: ProcurementConstraints
+): boolean {
+  const availability =
+    getAvailabilityStatus(
+      request,
+      offer
+    );
+
+  if (
+    availability === "unavailable"
+  ) {
+    return false;
+  }
+
+  if (
+    constraints.requireAvailableStock ===
+    true &&
+    availability !== "available"
+  ) {
+    return false;
+  }
+
+  return checkOfferConstraints(
+    request,
+    offer,
+    constraints
+  ).allowed;
+}
+
+function getOfferCapacity(
+  request: RequestLine,
+  offer: SupplierOffer
+): number {
+  if (
+    offer.availableQuantity ===
+    undefined
+  ) {
+    return request.quantity;
+  }
+
+  return Math.max(
+    0,
+    offer.availableQuantity
+  );
+}
+
 function buildOfferOption(
   request: RequestLine,
   offer: SupplierOffer,
@@ -57,28 +106,74 @@ function buildOfferOption(
       offer
     );
 
-  const warnings =
-    createOfferWarnings(
-      request,
-      offer
-    );
-
   return {
     requestLineId: request.id,
     offerId: offer.id,
     supplierId: offer.supplierId,
+
     unitPrice: offer.price,
+
     totalPrice:
       offer.price *
       request.quantity,
+
     availability,
+
     deliveryDays:
       offer.deliveryDays,
-    matchStatus: match.status,
+
+    matchStatus:
+      match.status,
+
     matchConfidence:
       match.confidence,
-    warnings,
+
+    warnings:
+      createOfferWarnings(
+        request,
+        offer
+      ),
   };
+}
+
+function buildMatchesForRequest(
+  request: RequestLine,
+  offers: SupplierOffer[],
+  matches: MatchedItem[]
+): Array<{
+  offer: SupplierOffer;
+  match: MatchedItem;
+}> {
+  return matches
+    .filter(
+      (match) =>
+        match.requestLineId ===
+          request.id &&
+        isUsableMatch(
+          match.status
+        )
+    )
+    .map((match) => {
+      const offer =
+        offers.find(
+          (item) =>
+            item.id ===
+            match.offerId
+        );
+
+      return offer
+        ? { offer, match }
+        : null;
+    })
+    .filter(
+      (
+        item
+      ): item is {
+        offer: SupplierOffer;
+        match: MatchedItem;
+      } =>
+        item !== null
+    );
 }
 
 function calculateBestSingleSupplierCost(
@@ -104,57 +199,27 @@ function calculateBestSingleSupplierCost(
 
     for (const request of requests) {
       const candidates =
-        matches
-          .filter(
-            (match) =>
-              match.requestLineId ===
-                request.id &&
-              isUsableMatch(
-                match.status
-              )
-          )
-          .map(
-            (match) =>
-              offers.find(
-                (offer) =>
-                  offer.id ===
-                    match.offerId &&
-                  offer.supplierId ===
-                    supplierId
-              )
-          )
-          .filter(
-            (
-              offer
-            ): offer is SupplierOffer =>
-              offer !== undefined
-          )
-          .filter((offer) => {
-            const availability =
-              getAvailabilityStatus(
-                request,
-                offer
-              );
+        buildMatchesForRequest(
+          request,
+          offers.filter(
+            (offer) =>
+              offer.supplierId ===
+              supplierId
+          ),
+          matches
+        )
+        .filter(
+          ({ offer }) =>
+            isOfferAllowed(
+              request,
+              offer,
+              constraints
+            )
+        );
 
-            const constraintsResult =
-              checkOfferConstraints(
-                request,
-                offer,
-                {
-                  ...constraints,
-                  requireAvailableStock:
-                    true,
-                }
-              );
-
-            return (
-              availability ===
-                "available" &&
-              constraintsResult.allowed
-            );
-          });
-
-      if (candidates.length === 0) {
+      if (
+        candidates.length === 0
+      ) {
         coversAll = false;
         break;
       }
@@ -162,14 +227,14 @@ function calculateBestSingleSupplierCost(
       const cheapest =
         candidates.reduce(
           (best, current) =>
-            current.price <
-            best.price
+            current.offer.price <
+            best.offer.price
               ? current
               : best
         );
 
       total +=
-        cheapest.price *
+        cheapest.offer.price *
         request.quantity;
     }
 
@@ -194,150 +259,71 @@ export function optimizePurchase(
       allowSplitPurchase: true,
     };
 
-  const allocations: PurchaseAllocation[] =
-    [];
+  const allocations:
+    PurchaseAllocation[] = [];
 
-  const decisions: PurchaseDecision[] =
-    [];
+  const decisions:
+    PurchaseDecision[] = [];
 
-  const globalWarnings: Warning[] =
-    [];
+  const globalWarnings:
+    Warning[] = [];
 
   for (const request of input.requests) {
     const requestMatches =
-      input.matches.filter(
-        (match) =>
-          match.requestLineId ===
-          request.id
+      buildMatchesForRequest(
+        request,
+        input.offers,
+        input.matches
       );
 
     const options =
-      requestMatches
-        .map((match) => {
-          const offer =
-            input.offers.find(
-              (item) =>
-                item.id ===
-                match.offerId
-            );
-
-          return offer
-            ? {
-                offer,
-                match,
-              }
-            : null;
-        })
-        .filter(
-          (
-            item
-          ): item is {
-            offer: SupplierOffer;
-            match: MatchedItem;
-          } => item !== null
-        )
-        .map(({ offer, match }) =>
+      requestMatches.map(
+        ({ offer, match }) =>
           buildOfferOption(
             request,
             offer,
             match
           )
-        );
-
-    const warnings =
-      options.flatMap(
-        (option) =>
-          option.warnings
       );
 
     const eligible =
-      requestMatches
-        .filter((match) =>
-          isUsableMatch(
-            match.status
+      requestMatches.filter(
+        ({ offer }) =>
+          isOfferAllowed(
+            request,
+            offer,
+            constraints
           )
-        )
-        .map((match) => {
-          const offer =
-            input.offers.find(
-              (item) =>
-                item.id ===
-                match.offerId
-            );
-
-          return offer
-            ? {
-                offer,
-                match,
-              }
-            : null;
-        })
-        .filter(
-          (
-            item
-          ): item is {
-            offer: SupplierOffer;
-            match: MatchedItem;
-          } => item !== null
-        )
-        .filter(({ offer }) => {
-          const availability =
-            getAvailabilityStatus(
-              request,
-              offer
-            );
-
-          const constraintResult =
-            checkOfferConstraints(
-              request,
-              offer,
-              constraints
-            );
-
-          return (
-            availability ===
-              "available" &&
-            constraintResult.allowed
-          );
-        });
+      );
 
     const ranked =
       rankOffers(
         eligible.map(
-          ({ offer }) => offer
+          ({ offer }) =>
+            offer
         ),
         strategy
       );
 
-    let remaining =
-      request.quantity;
-
     const selected:
       PurchaseAllocation[] = [];
 
+    let remaining =
+      request.quantity;
+
     if (
       constraints.allowSplitPurchase ===
-        false &&
-      ranked.length > 0
+        false
     ) {
       const selectedOffer =
-        ranked.find((offer) => {
-          const availability =
-            getAvailabilityStatus(
-              request,
-              offer
-            );
-
-          return (
-            availability ===
-              "available"
-          );
-        });
+        ranked[0];
 
       if (selectedOffer) {
-        const allocation = {
-          requestLineId: request.id,
-          offerId: selectedOffer.id,
+        selected.push({
+          requestLineId:
+            request.id,
+          offerId:
+            selectedOffer.id,
           supplierId:
             selectedOffer.supplierId,
           quantity:
@@ -345,35 +331,43 @@ export function optimizePurchase(
           unitPrice:
             selectedOffer.price,
           totalPrice:
-            request.quantity *
-            selectedOffer.price,
-        };
+            selectedOffer.price *
+            request.quantity,
+        });
 
-        selected.push(allocation);
+        remaining = 0;
       }
     } else {
       for (const offer of ranked) {
-        if (remaining <= 0) {
+        if (
+          remaining <= 0
+        ) {
           break;
         }
 
-        const available =
-          offer.availableQuantity ??
-          0;
+        const capacity =
+          getOfferCapacity(
+            request,
+            offer
+          );
+
+        if (
+          capacity <= 0
+        ) {
+          continue;
+        }
 
         const quantity =
           Math.min(
             remaining,
-            available
+            capacity
           );
 
-        if (quantity <= 0) {
-          continue;
-        }
-
-        const allocation = {
-          requestLineId: request.id,
-          offerId: offer.id,
+        selected.push({
+          requestLineId:
+            request.id,
+          offerId:
+            offer.id,
           supplierId:
             offer.supplierId,
           quantity,
@@ -382,11 +376,10 @@ export function optimizePurchase(
           totalPrice:
             quantity *
             offer.price,
-        };
+        });
 
-        selected.push(allocation);
-
-        remaining -= quantity;
+        remaining -=
+          quantity;
       }
     }
 
@@ -394,87 +387,184 @@ export function optimizePurchase(
       ...selected
     );
 
-    const lineAllocatedQuantity =
-      selected.reduce(
-        (sum, item) =>
-          sum + item.quantity,
-        0
+    const lineWarnings =
+      options.flatMap(
+        (option) =>
+          option.warnings
       );
 
-    const status =
-      lineAllocatedQuantity >=
-      request.quantity
-        ? "recommended"
-        : requestMatches.length ===
-          0
-          ? "unavailable"
-          : "requires_review";
+    const uniqueWarningMap =
+      new Map<
+        string,
+        Warning
+      >();
 
-    const lineWarnings =
-      [...warnings];
+    for (
+      const warning of lineWarnings
+    ) {
+      const key =
+        `${warning.code}:${warning.message}`;
+
+      uniqueWarningMap.set(
+        key,
+        warning
+      );
+    }
+
+    const uniqueWarnings = [
+      ...uniqueWarningMap.values(),
+    ];
 
     if (
-      lineAllocatedQuantity <
-      request.quantity
+      remaining > 0
     ) {
-      lineWarnings.push({
+      uniqueWarnings.push({
         code:
           "quantity_not_fully_covered",
-        severity: "critical",
+        severity:
+          "critical",
         message:
-          `Не удалось автоматически покрыть всю потребность: ${request.quantity - lineAllocatedQuantity} шт. не распределено.`,
+          `Не удалось автоматически покрыть всю потребность: ${remaining} шт. не распределено.`,
       });
     }
 
-    const selectedSuppliers = [
+    const hasAllocation =
+      selected.length > 0;
+
+    const fullyCovered =
+      remaining <= 0;
+
+    let status:
+      | "recommended"
+      | "requires_review"
+      | "unavailable";
+
+    if (
+      fullyCovered
+    ) {
+      status =
+        "recommended";
+    } else if (
+      hasAllocation ||
+      eligible.length > 0
+    ) {
+      status =
+        "requires_review";
+    } else {
+      status =
+        "unavailable";
+    }
+
+    const suppliers = [
       ...new Set(
         selected.map(
-          (item) =>
-            item.supplierId
+          (allocation) =>
+            allocation.supplierId
         )
       ),
     ];
 
-    const reasons =
-      selectedSuppliers.length > 1
-        ? [
-            "Потребность распределена между несколькими поставщиками.",
-          ]
-        : selectedSuppliers.length ===
-            1
-          ? [
-              `Выбран поставщик ${selectedSuppliers[0]}.`,
-            ]
-          : [
-              "Автоматическая рекомендация не сформирована.",
-            ];
+    const reasons: string[] =
+      [];
+
+    if (
+      suppliers.length ===
+      1
+    ) {
+      reasons.push(
+        `Позиция закупается у ${suppliers[0]}.`
+      );
+    } else if (
+      suppliers.length > 1
+    ) {
+      reasons.push(
+        "Позиция распределена между несколькими поставщиками."
+      );
+    }
+
+    if (
+      strategy ===
+      "cheapest"
+    ) {
+      reasons.push(
+        "Использована стратегия минимальной стоимости."
+      );
+    }
+
+    if (
+      strategy ===
+      "fastest"
+    ) {
+      reasons.push(
+        "Использована стратегия минимального срока поставки."
+      );
+    }
+
+    if (
+      strategy ===
+      "balanced"
+    ) {
+      reasons.push(
+        "Использована сбалансированная стратегия цены и срока."
+      );
+    }
+
+    if (
+      status !==
+      "recommended"
+    ) {
+      reasons.push(
+        "Позиция требует проверки закупщиком."
+      );
+    }
+
+    const recommendation =
+      {
+        summary:
+          status ===
+          "recommended"
+            ? "Позиция покрыта автоматически."
+            : status ===
+                "requires_review"
+              ? "Позиция требует проверки."
+              : "Для позиции не найдено подходящего предложения.",
+
+        reasons,
+
+        warnings:
+          uniqueWarnings,
+      };
 
     decisions.push({
-      requestLine: request,
+      requestLine:
+        request,
+
       options,
-      allocations: selected,
+
+      allocations:
+        selected,
+
       strategy,
+
       status,
-      warnings: lineWarnings,
-      recommendation: {
-        summary:
-          status === "recommended"
-            ? "Позиция покрыта автоматически."
-            : "Позиция требует проверки.",
-        reasons,
-        warnings:
-          lineWarnings,
-      },
+
+      warnings:
+        uniqueWarnings,
+
+      recommendation,
     });
 
     globalWarnings.push(
-      ...lineWarnings
+      ...uniqueWarnings
     );
   }
 
   const totalCost =
     allocations.reduce(
-      (sum, allocation) =>
+      (
+        sum,
+        allocation
+      ) =>
         sum +
         allocation.totalPrice,
       0
@@ -489,15 +579,18 @@ export function optimizePurchase(
     ),
   ];
 
-  const supplierTotals: Record<
-    string,
-    {
-      items: number;
-      total: number;
-    }
-  > = {};
+  const supplierTotals:
+    Record<
+      string,
+      {
+        items: number;
+        total: number;
+      }
+    > = {};
 
-  for (const allocation of allocations) {
+  for (
+    const allocation of allocations
+  ) {
     const current =
       supplierTotals[
         allocation.supplierId
@@ -507,6 +600,7 @@ export function optimizePurchase(
       };
 
     current.items += 1;
+
     current.total +=
       allocation.totalPrice;
 
@@ -540,21 +634,35 @@ export function optimizePurchase(
       : null;
 
   return {
-    success: decisions.every(
-      (decision) =>
-        decision.status ===
-        "recommended"
-    ),
-    requestLines: input.requests,
+    success:
+      decisions.every(
+        (decision) =>
+          decision.status ===
+          "recommended"
+      ),
+
+    requestLines:
+      input.requests,
+
     decisions,
+
     allocations,
+
     totalCost,
+
     bestSingleSupplierCost,
+
     potentialSavings,
+
     savingsMessage,
+
     suppliers,
+
     supplierTotals,
-    warnings: globalWarnings,
+
+    warnings:
+      globalWarnings,
+
     strategy,
   };
 }

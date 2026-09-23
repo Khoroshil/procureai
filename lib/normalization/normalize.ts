@@ -203,7 +203,7 @@ export function normalizeOfferRows(
           .replace(/\s+/g, "-");
 
       return {
-        id: `offer-${index + 1}`,
+        id: `${supplierId}-offer-${index + 1}`,
         supplierId,
         articleRaw,
         articleNormalized,

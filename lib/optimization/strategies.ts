@@ -14,14 +14,14 @@ export function getStrategyWeights(
   switch (strategy) {
     case "cheapest":
       return {
-        price: 0.9,
-        delivery: 0.1,
+        price: 1,
+        delivery: 0,
       };
 
     case "fastest":
       return {
-        price: 0.1,
-        delivery: 0.9,
+        price: 0,
+        delivery: 1,
       };
 
     case "balanced":
@@ -46,26 +46,63 @@ export function rankOffers<
     return [...offers];
   }
 
+  if (strategy === "cheapest") {
+    return [...offers].sort(
+      (a, b) =>
+        a.price - b.price
+    );
+  }
+
+  if (strategy === "fastest") {
+    return [...offers].sort(
+      (a, b) => {
+        const aDays =
+          a.deliveryDays ??
+          Number.MAX_SAFE_INTEGER;
+
+        const bDays =
+          b.deliveryDays ??
+          Number.MAX_SAFE_INTEGER;
+
+        if (aDays !== bDays) {
+          return aDays - bDays;
+        }
+
+        return (
+          a.price - b.price
+        );
+      }
+    );
+  }
+
   const weights =
-    getStrategyWeights(strategy);
-
-  const prices = offers.map(
-    (offer) => offer.price
-  );
-
-  const deliveries = offers
-    .map((offer) =>
-      offer.deliveryDays
-    )
-    .filter(
-      (
-        value
-      ): value is number =>
-        value !== undefined
+    getStrategyWeights(
+      strategy
     );
 
-  const minPrice = Math.min(...prices);
-  const maxPrice = Math.max(...prices);
+  const prices = offers.map(
+    (offer) =>
+      offer.price
+  );
+
+  const deliveries =
+    offers
+      .map(
+        (offer) =>
+          offer.deliveryDays
+      )
+      .filter(
+        (
+          value
+        ): value is number =>
+          value !== undefined
+      );
+
+  const minPrice =
+    Math.min(...prices);
+
+  const maxPrice =
+    Math.max(...prices);
 
   const minDelivery =
     deliveries.length > 0
@@ -125,7 +162,9 @@ export function rankOffers<
     })
     .sort((a, b) => {
       if (a.score !== b.score) {
-        return a.score - b.score;
+        return (
+          a.score - b.score
+        );
       }
 
       if (
@@ -138,7 +177,12 @@ export function rankOffers<
         );
       }
 
-      return a.index - b.index;
+      return (
+        a.index - b.index
+      );
     })
-    .map((item) => item.offer);
+    .map(
+      (item) =>
+        item.offer
+    );
 }
