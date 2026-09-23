@@ -229,3 +229,75 @@ td {
     padding: 20px;
   }
 }
+
+
+/* Печатная версия отчёта ProcureAI */
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  .header,
+  .upload-card,
+  .footer {
+    display: none !important;
+  }
+
+  .hero {
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .hero .badge,
+  .hero h1,
+  .hero p {
+    display: none !important;
+  }
+
+  .dashboard {
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .dashboard .primary-btn {
+    display: none !important;
+  }
+
+  .dashboard .card:last-child {
+    display: none !important;
+  }
+
+  .card {
+    box-shadow: none !important;
+    border: 1px solid #d9dee7 !important;
+    break-inside: avoid;
+  }
+
+  .table-wrap {
+    overflow: visible !important;
+  }
+
+  table {
+    width: 100% !important;
+    font-size: 9pt !important;
+  }
+
+  th,
+  td {
+    white-space: normal !important;
+    padding: 6px 5px !important;
+  }
+
+  h2,
+  h3 {
+    color: #000000 !important;
+  }
+}

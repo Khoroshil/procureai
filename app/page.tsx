@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, useState } from "react";
+import * as XLSX from "xlsx";
 
 type Alternative = {
   supplier: string;
@@ -31,7 +32,8 @@ type AnalysisResult = {
   supplierCount: number;
   totalCost: number;
   bestSingleSupplierCost: number | null;
-  potentialSavings: number;
+  potentialSavings: number | null;
+  savingsMessage: string | null;
   optimalBreakdown: Record<
     string,
     {
@@ -54,6 +56,260 @@ function formatRub(value: number | null): string {
   }).format(value);
 }
 
+function downloadExcelReport(
+  analysis: AnalysisResult
+) {
+  const reportDate =
+    new Date().toLocaleDateString(
+      "ru-RU"
+    );
+
+  const resultsRows =
+    analysis.results.map((item) => ({
+      Артикул:
+        String(item.article || ""),
+      "Наименование":
+        String(item.name || ""),
+      "Количество":
+        Number(item.quantity || 0),
+      "Поставщик":
+        String(item.supplier || ""),
+      "Цена, ₽":
+        item.price === null
+          ? ""
+          : Number(item.price),
+      "Сумма, ₽":
+        item.total === null
+          ? ""
+          : Number(item.total),
+      "Срок поставки":
+        String(item.delivery || ""),
+    }));
+
+  const summaryRows = [
+    {
+      Показатель: "Дата отчёта",
+      Значение: reportDate,
+    },
+    {
+      Показатель: "Файл заявки",
+      Значение:
+        analysis.requestFile,
+    },
+    {
+      Показатель:
+        "Позиций в заявке",
+      Значение:
+        Number(analysis.positionCount),
+    },
+    {
+      Показатель:
+        "Найдено позиций",
+      Значение:
+        Number(analysis.matchedCount),
+    },
+    {
+      Показатель:
+        "Не найдено",
+      Значение:
+        Number(analysis.unmatchedCount),
+    },
+    {
+      Показатель:
+        "Поставщиков",
+      Значение:
+        Number(analysis.supplierCount),
+    },
+    {
+      Показатель:
+        "Оптимальная закупка, ₽",
+      Значение:
+        Number(analysis.totalCost),
+    },
+    {
+      Показатель:
+        "Закупка у одного поставщика, ₽",
+      Значение:
+        analysis.bestSingleSupplierCost ===
+        null
+          ? "Не рассчитывается"
+          : Number(
+              analysis.bestSingleSupplierCost
+            ),
+    },
+    {
+      Показатель:
+        "Потенциальная экономия, ₽",
+      Значение:
+        analysis.potentialSavings ===
+        null
+          ? "Не рассчитывается"
+          : Number(
+              analysis.potentialSavings
+            ),
+    },
+    {
+      Показатель:
+        "Комментарий",
+      Значение:
+        analysis.savingsMessage ||
+        "Экономия рассчитана относительно наиболее выгодного варианта закупки у одного поставщика.",
+    },
+  ];
+
+  const supplierRows =
+    Object.entries(
+      analysis.optimalBreakdown
+    ).map(
+      ([supplier, data]) => ({
+        Поставщик: String(
+          supplier
+        ),
+        "Количество позиций":
+          Number(data.items),
+        "Сумма, ₽":
+          Number(data.total),
+      })
+    );
+
+  const workbook =
+    XLSX.utils.book_new();
+
+  const resultSheet =
+    XLSX.utils.json_to_sheet(
+      resultsRows
+    );
+
+  const summarySheet =
+    XLSX.utils.json_to_sheet(
+      summaryRows
+    );
+
+  const supplierSheet =
+    XLSX.utils.json_to_sheet(
+      supplierRows
+    );
+
+  // Форматы числовых ячеек
+  for (
+    let row = 2;
+    row <= resultsRows.length + 1;
+    row++
+  ) {
+    const quantityCell =
+      resultSheet[`C${row}`];
+
+    const priceCell =
+      resultSheet[`E${row}`];
+
+    const totalCell =
+      resultSheet[`F${row}`];
+
+    if (quantityCell) {
+      quantityCell.z = "0";
+    }
+
+    if (priceCell) {
+      priceCell.z =
+        '# ##0,00 "₽"';
+    }
+
+    if (totalCell) {
+      totalCell.z =
+        '# ##0,00 "₽"';
+    }
+  }
+
+  // Сводка: денежные показатели
+  const moneySummaryRows = [
+    7,
+    8,
+    9,
+  ];
+
+  for (
+    const row of moneySummaryRows
+  ) {
+    const cell =
+      summarySheet[`B${row}`];
+
+    if (
+      cell &&
+      typeof cell.v === "number"
+    ) {
+      cell.z =
+        '# ##0,00 "₽"';
+    }
+  }
+
+  // Поставщики
+  for (
+    let row = 2;
+    row <= supplierRows.length + 1;
+    row++
+  ) {
+    const itemsCell =
+      supplierSheet[`B${row}`];
+
+    const totalCell =
+      supplierSheet[`C${row}`];
+
+    if (itemsCell) {
+      itemsCell.z = "0";
+    }
+
+    if (totalCell) {
+      totalCell.z =
+        '# ##0,00 "₽"';
+    }
+  }
+
+  // Ширина колонок
+  resultSheet["!cols"] = [
+    { wch: 20 },
+    { wch: 42 },
+    { wch: 14 },
+    { wch: 28 },
+    { wch: 16 },
+    { wch: 18 },
+    { wch: 20 },
+  ];
+
+  summarySheet["!cols"] = [
+    { wch: 38 },
+    { wch: 55 },
+  ];
+
+  supplierSheet["!cols"] = [
+    { wch: 30 },
+    { wch: 24 },
+    { wch: 18 },
+  ];
+
+  XLSX.utils.book_append_sheet(
+    workbook,
+    summarySheet,
+    "Сводка"
+  );
+
+  XLSX.utils.book_append_sheet(
+    workbook,
+    resultSheet,
+    "Результат"
+  );
+
+  XLSX.utils.book_append_sheet(
+    workbook,
+    supplierSheet,
+    "Поставщики"
+  );
+
+  XLSX.writeFile(
+    workbook,
+    "ProcureAI_отчет.xlsx"
+  );
+}
+
 const telegramUrl =
   "https://t.me/Lafet29?text=" +
   encodeURIComponent(
@@ -61,10 +317,18 @@ const telegramUrl =
   );
 
 export default function Home() {
-  const [requestFile, setRequestFile] = useState<File | null>(null);
-  const [offerFiles, setOfferFiles] = useState<File[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [requestFile, setRequestFile] =
+    useState<File | null>(null);
+
+  const [offerFiles, setOfferFiles] =
+    useState<File[]>([]);
+
+  const [loading, setLoading] =
+    useState(false);
+
+  const [error, setError] =
+    useState("");
+
   const [analysis, setAnalysis] =
     useState<AnalysisResult | null>(null);
 
@@ -73,7 +337,8 @@ export default function Home() {
   ) {
     setError("");
 
-    const file = e.target.files?.[0] ?? null;
+    const file =
+      e.target.files?.[0] ?? null;
 
     setRequestFile(file);
     setAnalysis(null);
@@ -94,10 +359,8 @@ export default function Home() {
         ...files,
       ];
 
-      const uniqueFiles = new Map<
-        string,
-        File
-      >();
+      const uniqueFiles =
+        new Map<string, File>();
 
       for (const file of allFiles) {
         const key = [
@@ -115,7 +378,6 @@ export default function Home() {
     });
 
     setAnalysis(null);
-
     e.target.value = "";
   }
 
@@ -175,7 +437,8 @@ export default function Home() {
         }
       );
 
-      const data = await response.json();
+      const data =
+        await response.json();
 
       if (!response.ok) {
         throw new Error(
@@ -241,10 +504,11 @@ export default function Home() {
             </h1>
 
             <p>
-              Загрузите заявку и коммерческие
-              предложения. ProcureAI автоматически
-              сравнит позиции, цены, наличие и
-              сроки поставки.
+              Загрузите заявку и
+              коммерческие предложения.
+              ProcureAI автоматически
+              сравнит позиции, цены,
+              наличие и сроки поставки.
             </p>
 
             <div className="card upload-card">
@@ -258,8 +522,8 @@ export default function Home() {
                 </h3>
 
                 <p>
-                  Excel или CSV с позициями
-                  и количеством
+                  Excel или CSV с
+                  позициями и количеством
                 </p>
 
                 <label className="primary-btn">
@@ -384,8 +648,7 @@ export default function Home() {
                                 "#be123c",
                               cursor:
                                 "pointer",
-                              fontWeight:
-                                700,
+                              fontWeight: 700,
                             }}
                           >
                             Удалить
@@ -433,8 +696,8 @@ export default function Home() {
                     marginBottom: 9,
                   }}
                 >
-                  Нужна помощь с загрузкой
-                  или результатом?
+                  Нужна помощь с
+                  загрузкой или результатом?
                 </div>
 
                 <a
@@ -443,8 +706,7 @@ export default function Home() {
                   rel="noopener noreferrer"
                   style={{
                     color: "#2563eb",
-                    textDecoration:
-                      "none",
+                    textDecoration: "none",
                     fontWeight: 700,
                     fontSize: 14,
                   }}
@@ -497,10 +759,12 @@ export default function Home() {
                   </div>
 
                   <div className="stat-value">
-                    {formatRub(
-                      analysis.potentialSavings
-                    )}
-                  </div>
+                  {analysis.potentialSavings === null
+                    ? "—"
+                    : formatRub(
+                        analysis.potentialSavings
+                      )}
+                </div>
                 </div>
               </div>
             )}
@@ -560,15 +824,11 @@ export default function Home() {
                   }}
                 >
                   <div>
-                    <div
-                      className="stat-label"
-                    >
+                    <div className="stat-label">
                       Оптимальная закупка
                     </div>
 
-                    <div
-                      className="stat-value"
-                    >
+                    <div className="stat-value">
                       {formatRub(
                         analysis.totalCost
                       )}
@@ -576,15 +836,11 @@ export default function Home() {
                   </div>
 
                   <div>
-                    <div
-                      className="stat-label"
-                    >
+                    <div className="stat-label">
                       У одного поставщика
                     </div>
 
-                    <div
-                      className="stat-value"
-                    >
+                    <div className="stat-value">
                       {formatRub(
                         analysis.bestSingleSupplierCost
                       )}
@@ -592,20 +848,58 @@ export default function Home() {
                   </div>
 
                   <div>
-                    <div
-                      className="stat-label"
-                    >
+                    <div className="stat-label">
                       Экономия
                     </div>
 
-                    <div
-                      className="stat-value"
-                    >
-                      {formatRub(
-                        analysis.potentialSavings
-                      )}
+                    <div className="stat-value">
+                      {analysis.potentialSavings === null
+                        ? "—"
+                        : formatRub(
+                            analysis.potentialSavings
+                          )}
                     </div>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {analysis.savingsMessage && (
+              <div
+                className="card"
+                style={{
+                  marginBottom: 20,
+                  padding: 20,
+                  background: "#fffaf0",
+                  border: "1px solid #f0d9a6",
+                  color: "#7a5717",
+                }}
+              >
+                <strong>
+                  Экономия не рассчитана
+                </strong>
+
+                <div
+                  style={{
+                    marginTop: 7,
+                    fontSize: 14,
+                  }}
+                >
+                  {analysis.savingsMessage}
+                </div>
+
+                <div
+                  style={{
+                    marginTop: 8,
+                    fontSize: 13,
+                    color: "#8a6a2a",
+                  }}
+                >
+                  Чтобы рассчитать экономию,
+                  загрузите предыдущую закупку
+                  или коммерческое предложение,
+                  которое используется как база
+                  сравнения.
                 </div>
               </div>
             )}
@@ -617,21 +911,14 @@ export default function Home() {
                 padding: 24,
               }}
             >
-              <h3
-                style={{
-                  marginTop: 0,
-                }}
-              >
+              <h3 style={{ marginTop: 0 }}>
                 Распределение закупки
               </h3>
 
               {Object.entries(
                 analysis.optimalBreakdown
               ).map(
-                ([
-                  supplier,
-                  breakdown,
-                ]) => (
+                ([supplier, breakdown]) => (
                   <div
                     key={supplier}
                     style={{
@@ -650,8 +937,7 @@ export default function Home() {
                     </span>
 
                     <strong>
-                      {breakdown.items}{" "}
-                      поз. ·{" "}
+                      {breakdown.items} поз. ·{" "}
                       {formatRub(
                         breakdown.total
                       )}
@@ -660,6 +946,32 @@ export default function Home() {
                 )
               )}
             </div>
+
+            <button
+              type="button"
+              className="primary-btn"
+              onClick={() =>
+                downloadExcelReport(
+                  analysis
+                )
+              }
+              style={{
+                marginBottom: 20,
+              }}
+            >
+              📊 Скачать Excel-отчёт
+            </button>
+            <button
+              type="button"
+              className="primary-btn"
+              onClick={() => window.print()}
+              style={{
+                marginBottom: 20,
+                marginLeft: 10,
+              }}
+            >
+              📄 Сохранить PDF
+            </button>
 
             <div className="card table-wrap">
               <table>
@@ -755,10 +1067,8 @@ export default function Home() {
                 rel="noopener noreferrer"
                 className="primary-btn"
                 style={{
-                  textDecoration:
-                    "none",
-                  display:
-                    "inline-flex",
+                  textDecoration: "none",
+                  display: "inline-flex",
                 }}
               >
                 💬 Задать вопрос онлайн
@@ -787,8 +1097,7 @@ export default function Home() {
               rel="noopener noreferrer"
               style={{
                 color: "#2563eb",
-                textDecoration:
-                  "none",
+                textDecoration: "none",
                 fontWeight: 600,
               }}
             >
